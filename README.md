@@ -39,7 +39,7 @@ go get github.com/y3labs/nylas-go@latest
 Then import the SDK package:
 
 ```go
-import "gitlab.com/y3labs/nylas-go/nylas"
+import "github.com/y3labs/nylas-go/nylas"
 ```
 ---
 
