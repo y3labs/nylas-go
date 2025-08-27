@@ -35,7 +35,9 @@ jobs:
 
       # Match your local command; switch ./nylas -> ./... if you want all pkgs
       - name: Test (race + coverage)
-        run: go test ./nylas -v -race -covermode=atomic -coverprofile=coverage.out
+        run: |
+          export GOFLAGS="-trimpath"
+          go test ./nylas -v -race -covermode=atomic -coverprofile=coverage.out
 
       - name: Coverage summary (job summary)
         run: |
@@ -70,6 +72,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out
+          flags: nylas
           fail_ci_if_error: true
           verbose: true
 
