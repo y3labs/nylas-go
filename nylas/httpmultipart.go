@@ -87,7 +87,7 @@ func (c *Client) doMultipartParts(
 		return nil, err
 	}
 
-	// Build multipart once; reuse the bytes on retries.
+	// Build multipart once; we’ll reuse the bytes on retries.
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 

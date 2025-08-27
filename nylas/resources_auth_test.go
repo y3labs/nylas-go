@@ -442,3 +442,369 @@ func assertQueryEqual(t *testing.T, want, got url.Values) {
 		}
 	}
 }
+
+func TestBuildAuthQuery_AccessType_And_IncludeGrantScopes(t *testing.T) {
+	offline := models.AccessType("offline") // or models.AccessTypeOffline if you have it
+	cfg := models.URLForAuthenticationConfig{
+		ClientID:    "abc",
+		RedirectURI: "https://app/cb",
+		Scope:       []string{"s1"},
+		AccessType:  &offline,
+	}
+	yes := true
+	cfg.IncludeGrantScopes = &yes
+
+	q := buildAuthQuery(cfg)
+	if got := q.Get("access_type"); got != "offline" {
+		t.Fatalf("access_type = %q, want offline", got)
+	}
+	if got := q.Get("include_grant_scopes"); got != "true" {
+		t.Fatalf("include_grant_scopes = %q, want true", got)
+	}
+
+	// flip the flag and ensure "false" is emitted
+	no := false
+	cfg.IncludeGrantScopes = &no
+	q2 := buildAuthQuery(cfg)
+	if got := q2.Get("include_grant_scopes"); got != "false" {
+		t.Fatalf("include_grant_scopes = %q, want false", got)
+	}
+}
+
+// tiny sanity so we don't regress the %20 behavior via urlAuthBuilder
+func TestURLForOAuth2_SpacesAsPercent20(t *testing.T) {
+	c := NewClient("test-key", WithServerURL("http://x"))
+	a := &AuthResource{c: c}
+	cfg := models.URLForAuthenticationConfig{
+		ClientID:    "abc",
+		RedirectURI: "https://app/cb",
+		Scope:       []string{"email.read_only", "calendar"}, // space-joined
+	}
+	u := a.URLForOAuth2(cfg)
+	// ensure we don't use '+' for spaces
+	if url.QueryEscape("email.read_only calendar") == "email.read_only+calendar" && // guard
+		// we expect %20 in final URL
+		!contains(u, "scope=email.read_only%20calendar") {
+		t.Fatalf("expected %%20 in scope, got URL: %s", u)
+	}
+}
+
+func TestExchangeCodeForToken_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/connect/token" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid_request", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	a := &AuthResource{c: c}
+
+	_, err := a.ExchangeCodeForToken(context.Background(), models.CodeExchangeRequest{
+		ClientID:    "cid",
+		RedirectURI: "https://cb",
+		Code:        "code",
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestExchangeCodeForToken_DefaultClientSecret_And_CodeVerifier(t *testing.T) {
+	var seen map[string]any
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		seen = body
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok"})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	// set apiKey so the method injects it as client_secret
+	c.apiKey = "api-secret"
+	a := &AuthResource{c: c}
+
+	cv := "verifier-123"
+	_, err := a.ExchangeCodeForToken(context.Background(), models.CodeExchangeRequest{
+		ClientID:     "cid",
+		RedirectURI:  "https://cb",
+		Code:         "code",
+		CodeVerifier: &cv,
+		// ClientSecret intentionally nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	if seen["grant_type"] != "authorization_code" ||
+		seen["client_id"] != "cid" ||
+		seen["redirect_uri"] != "https://cb" ||
+		seen["code"] != "code" ||
+		seen["client_secret"] != "api-secret" ||
+		seen["code_verifier"] != "verifier-123" {
+		t.Fatalf("unexpected request body: %#v", seen)
+	}
+}
+
+func TestRefreshAccessToken_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "unauthorized", "message": "bad"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	a := &AuthResource{c: c}
+
+	_, err := a.RefreshAccessToken(context.Background(), models.TokenExchangeRequest{
+		ClientID:     "cid",
+		RedirectURI:  "https://cb",
+		RefreshToken: "rt",
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestRefreshAccessToken_DefaultClientSecret(t *testing.T) {
+	var seen map[string]any
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&seen)
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "tok2"})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	c.apiKey = "api-secret-2"
+	a := &AuthResource{c: c}
+
+	_, err := a.RefreshAccessToken(context.Background(), models.TokenExchangeRequest{
+		ClientID:     "cid",
+		RedirectURI:  "https://cb",
+		RefreshToken: "rt",
+		// ClientSecret nil → gets defaulted
+	})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+
+	if seen["grant_type"] != "refresh_token" ||
+		seen["client_id"] != "cid" ||
+		seen["redirect_uri"] != "https://cb" ||
+		seen["refresh_token"] != "rt" ||
+		seen["client_secret"] != "api-secret-2" {
+		t.Fatalf("unexpected request body: %#v", seen)
+	}
+}
+
+func TestIDTokenInfo_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("id_token") != "id-123" {
+			t.Fatalf("query mismatch: %s", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid_token", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().IDTokenInfo(context.Background(), "id-123")
+	if err == nil || res != nil {
+		t.Fatalf("expected error, got res=%#v err=%v", res, err)
+	}
+}
+
+func TestIDTokenInfo_RequestIDFallbackFromHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "rid-ti")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"iss": "https://nylas.com"},
+			// no "request_id" on purpose
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().IDTokenInfo(context.Background(), "tok")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-ti" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestValidateAccessToken_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("access_token") != "a-1" {
+			t.Fatalf("query mismatch: %s", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "forbidden", "message": "no"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().ValidateAccessToken(context.Background(), "a-1")
+	if err == nil || res != nil {
+		t.Fatalf("expected error, got res=%#v", res)
+	}
+}
+
+func TestValidateAccessToken_RequestIDFallbackFromHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "rid-vt")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"aud": "app"},
+			// no request_id in body
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().ValidateAccessToken(context.Background(), "ok")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-vt" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestRevoke_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != "bad" {
+			t.Fatalf("query mismatch: %s", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	ok, err := c.Auth().Revoke(context.Background(), "bad")
+	if err == nil || ok {
+		t.Fatalf("expected error, got ok=%v err=%v", ok, err)
+	}
+}
+
+func TestRevoke_Success(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("token") != "good" {
+			t.Fatalf("query mismatch: %s", r.URL.RawQuery)
+		}
+		// 204/200 both fine
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	ok, err := c.Auth().Revoke(context.Background(), "good")
+	if err != nil || !ok {
+		t.Fatalf("want ok=true, got ok=%v err=%v", ok, err)
+	}
+}
+
+func TestCustomAuthentication_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().CustomAuthentication(context.Background(), map[string]any{"x": "y"})
+	if err == nil || res != nil {
+		t.Fatalf("expected error, got %#v", res)
+	}
+}
+
+func TestCustomAuthentication_RequestIDFallbackFromHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "rid-custom")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{}, // minimal
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Auth().CustomAuthentication(context.Background(), map[string]any{"x": "y"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-custom" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestDetectProvider_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("email") != "user@example.com" || q.Get("all_provider_types") != "true" {
+			t.Fatalf("query mismatch: %s", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "not_found", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	a := c.Auth()
+	apt := true
+	_, err := a.DetectProvider(context.Background(), models.ProviderDetectParams{
+		Email:            "user@example.com",
+		AllProviderTypes: &apt,
+	})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestDetectProvider_RequestIDFallbackFromHeader(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Request-Id", "rid-dp")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"result": "ok"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	a := c.Auth()
+	res, err := a.DetectProvider(context.Background(), models.ProviderDetectParams{Email: "u@e.com"})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-dp" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}

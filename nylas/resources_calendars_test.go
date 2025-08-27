@@ -549,3 +549,368 @@ func TestCalendars_GetFreeBusy(t *testing.T) {
 		t.Fatalf("free-busy body missing emails: %#v", got)
 	}
 }
+
+func TestCalendars_List_ErrorPath(t *testing.T) {
+	// Non-2xx → error, nil response
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/grants/ten-1/calendars" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "server_error", "message": "boom"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).List(context.Background(), "ten-1", &models.ListCalendarsQueryParams{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_List_HeadersPropagated(t *testing.T) {
+	// 200 with header; ListResponse has Headers set (no RequestID field on ListResponse)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/grants/ten-2/calendars" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-list")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []any{}, // minimal list payload
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).List(context.Background(), "ten-2", &models.ListCalendarsQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.Headers.Get("X-Request-Id") != "rid-list" {
+		t.Fatalf("headers not propagated: %#v", res)
+	}
+}
+
+func TestCalendars_Get_ErrorPath(t *testing.T) {
+	// 404 → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/grants/ten-3/calendars/cal-1" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "not_found", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Get(context.Background(), "ten-3", "cal-1", &models.FindCalendarQueryParams{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_Get_HeaderRequestIDFallback(t *testing.T) {
+	// 200, request id only in header → copy into Response.RequestID
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/grants/ten-4/calendars/primary" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-get")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"id": "primary"},
+			// no "request_id" on purpose
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Get(context.Background(), "ten-4", "primary", &models.FindCalendarQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-get" || res.Headers.Get("X-Request-Id") != "rid-get" {
+		t.Fatalf("request id/headers not propagated: %#v", res)
+	}
+}
+
+func TestCalendars_Create_ErrorPath(t *testing.T) {
+	// 400 → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/grants/ten-5/calendars" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid", "message": "bad"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Create(context.Background(), "ten-5", models.CreateCalendarRequest{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_Create_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with header-only request id
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/grants/ten-6/calendars" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-create-cal")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Create(context.Background(), "ten-6", models.CreateCalendarRequest{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-create-cal" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestCalendars_Update_ErrorPath(t *testing.T) {
+	// 403 → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/v3/grants/ten-7/calendars/cal-7" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "forbidden", "message": "no"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Update(context.Background(), "ten-7", "cal-7", models.UpdateCalendarRequest{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_Update_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with header-only request id
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/v3/grants/ten-8/calendars/cal-8" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-update-cal")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"id": "cal-8"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Update(context.Background(), "ten-8", "cal-8", models.UpdateCalendarRequest{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-update-cal" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestCalendars_Delete_ErrorPath(t *testing.T) {
+	// 400 → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/v3/grants/ten-9/calendars/cal-9" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Delete(context.Background(), "ten-9", "cal-9")
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_Delete_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with header-only request id (DeleteResponse)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/v3/grants/ten-10/calendars/cal-10" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-del-cal")
+		_ = json.NewEncoder(w).Encode(map[string]any{})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).Delete(context.Background(), "ten-10", "cal-10")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-del-cal" || res.Headers.Get("X-Request-Id") != "rid-del-cal" {
+		t.Fatalf("request id/headers not propagated: %#v", res)
+	}
+}
+
+func TestCalendars_GetAvailability_ErrorPath(t *testing.T) {
+	// Global availability endpoint → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/calendars/availability" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "server_error", "message": "boom"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).GetAvailability(context.Background(), models.GetAvailabilityRequest{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_GetAvailability_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with header-only request id
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/calendars/availability" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-cal-avail")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).GetAvailability(context.Background(), models.GetAvailabilityRequest{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-cal-avail" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestCalendars_GetFreeBusy_ErrorPath(t *testing.T) {
+	// Grant-scoped free-busy → error
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/grants/ten-11/calendars/free-busy" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "forbidden", "message": "deny"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).GetFreeBusy(context.Background(), "ten-11", models.GetFreeBusyRequest{})
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestCalendars_GetFreeBusy_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with header-only request id; payload minimal
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/grants/ten-12/calendars/free-busy" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-freebusy")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []any{},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := (&CalendarsResource{c}).GetFreeBusy(context.Background(), "ten-12", models.GetFreeBusyRequest{})
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-freebusy" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestCalendars_Delete_ErrorPath2(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/v3/grants/g1/calendars/cal-1" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(404)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": "rid-404",
+			"error":      map[string]any{"type": "not_found", "message": "missing"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &CalendarsResource{c}
+	_, err := r.Delete(context.Background(), "g1", "cal-1")
+	if err == nil {
+		t.Fatalf("expected error for 404")
+	}
+	if !IsStatus(err, 404) {
+		t.Fatalf("want 404, got %v", err)
+	}
+}
+
+func TestCalendars_Delete_HeaderFallback2(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-request-id", "rid-del")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true, // DeleteResponse JSON; no request_id in body
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &CalendarsResource{c}
+	out, err := r.Delete(context.Background(), "g1", "cal-1")
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if out.RequestID != "rid-del" {
+		t.Fatalf("request id fallback failed: %#v", out)
+	}
+}

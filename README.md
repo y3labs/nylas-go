@@ -1,5 +1,10 @@
 # nylas-go
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/y3labs/nylas-go/nylas.svg)](https://pkg.go.dev/github.com/y3labs/nylas-go/nylas)
+[![Go Report Card](https://goreportcard.com/badge/github.com/y3labs/nylas-go)](https://goreportcard.com/report/github.com/y3labs/nylas-go)
+[![CI](https://github.com/y3labs/nylas-go/actions/workflows/ci.yml/badge.svg)](https://github.com/y3labs/nylas-go/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/y3labs/nylas-go/branch/main/graph/badge.svg)](https://codecov.io/gh/y3labs/nylas-go)
+
 An unofficial, Go client for the \[Nylas v3 API]. It provides a small, well-typed core with resource helpers (Calendars, Messages, Threads, Folders, Drafts, Events, Webhooks, Scheduler, etc.)
 
 > **Note**: This library is not maintained by Nylas, Inc. Y3 Labs is in no way affiliated with Nylas, we are just a fan of their product as well as Go and wanted to share the Go SDK we built for others that may share our interests.

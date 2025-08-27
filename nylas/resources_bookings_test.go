@@ -225,3 +225,284 @@ func TestBookings_Destroy(t *testing.T) {
 		t.Fatalf("destroy body = %#v", gotBody)
 	}
 }
+
+func TestBookings_Find_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-1" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		// Non-2xx → DoJSON returns error
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid_request", "message": "boom"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	_, err := r.Find(context.Background(), "bk-1", &models.FindBookingQueryParams{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestBookings_Find_HeaderRequestIDFallback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-2" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		// No request_id in JSON; present only in header
+		w.Header().Set("X-Request-Id", "rid-find")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	res, err := r.Find(context.Background(), "bk-2", &models.FindBookingQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-find" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+	if res.Headers.Get("X-Request-Id") != "rid-find" {
+		t.Fatalf("headers not propagated")
+	}
+}
+
+func TestBookings_Create_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/scheduling/bookings" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "server_error", "message": "nope"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	_, err := r.Create(context.Background(), models.CreateBookingRequest{}, &models.CreateBookingQueryParams{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestBookings_Create_HeaderRequestIDFallback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/scheduling/bookings" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-create")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	res, err := r.Create(context.Background(), models.CreateBookingRequest{}, &models.CreateBookingQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-create" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestBookings_Confirm_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-3" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "forbidden", "message": "deny"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	_, err := r.Confirm(context.Background(), "bk-3", models.ConfirmBookingRequest{}, &models.ConfirmBookingQueryParams{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestBookings_Confirm_HeaderRequestIDFallback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-4" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-confirm")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	res, err := r.Confirm(context.Background(), "bk-4", models.ConfirmBookingRequest{}, &models.ConfirmBookingQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-confirm" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestBookings_Reschedule_ErrorPath(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-5" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "not_found", "message": "missing"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	_, err := r.Reschedule(context.Background(), "bk-5", models.RescheduleBookingRequest{}, &models.RescheduleBookingQueryParams{})
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestBookings_Reschedule_HeaderRequestIDFallback(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-6" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-resched")
+		_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{}})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	res, err := r.Reschedule(context.Background(), "bk-6", models.RescheduleBookingRequest{}, &models.RescheduleBookingQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || res.RequestID != "rid-resched" {
+		t.Fatalf("request id fallback failed: %#v", res)
+	}
+}
+
+func TestBookings_Destroy_ErrorPath(t *testing.T) {
+	// DELETE returns error; Destroy should forward it and return (nil, err).
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-7" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{"type": "invalid", "message": "no"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	out, err := r.Destroy(context.Background(), "bk-7", models.DeleteBookingRequest{}, &models.DestroyBookingQueryParams{})
+	if err == nil || out != nil {
+		t.Fatalf("expected error and nil out, got out=%#v err=%v", out, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestBookings_Destroy_HeaderRequestIDFallback(t *testing.T) {
+	// 200 with no request_id in JSON; header should populate DeleteResponse.RequestID.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.EscapedPath() != "/v3/scheduling/bookings/bk-8" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-destroy")
+		_ = json.NewEncoder(w).Encode(map[string]any{}) // minimal body
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c: c}
+	out, err := r.Destroy(context.Background(), "bk-8", models.DeleteBookingRequest{}, &models.DestroyBookingQueryParams{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out == nil || out.RequestID != "rid-destroy" {
+		t.Fatalf("request id fallback failed: %#v", out)
+	}
+	if out.Headers.Get("X-Request-Id") != "rid-destroy" {
+		t.Fatalf("headers not propagated")
+	}
+}
+
+func TestBookings_Create_ErrorPath2(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.EscapedPath() != "/v3/scheduling/bookings" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(500)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": "rid-err",
+			"error":      map[string]any{"type": "server_error", "message": "boom"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c}
+	_, err := r.Create(context.Background(), models.CreateBookingRequest{}, nil)
+	if err == nil {
+		t.Fatalf("expected error")
+	}
+	if !IsStatus(err, 500) {
+		t.Fatalf("want 500 status, got %v", err)
+	}
+}
+
+func TestBookings_Create_HeaderFallback_And_Query(t *testing.T) {
+	type Q = models.CreateBookingQueryParams
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify we actually encoded query (adjust keys to match your params)
+		if got := r.URL.Query().Get("timezone"); got != "America/NewYork" {
+			t.Fatalf("query not encoded: %q", r.URL.String())
+		}
+		w.Header().Set("x-request-id", "rid-created")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": map[string]any{"id": "bk-1"},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	r := &BookingsResource{c}
+	out, err := r.Create(context.Background(),
+		models.CreateBookingRequest{}, &Q{Timezone: StringPtr("America/NewYork")}, // change to a real field present in your Q
+	)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if out.RequestID != "rid-created" {
+		t.Fatalf("missing header fallback: %#v", out)
+	}
+}
