@@ -1,0 +1,26 @@
+codecov:
+  require_ci_to_pass: yes
+
+fixes:
+  - "/home/runner/work/nylas-go/nylas-go/::"
+  - "github.com/y3labs/nylas-go/::"
+
+flags:
+  nylas:
+    paths:
+      - "nylas/"
+
+coverage:
+  status:
+    project:
+      nylas:
+        target: 85%
+        threshold: 1%
+        flags:
+          - nylas
+    patch:
+      default:
+        target: auto
+
+ignore:
+  - "examples/**"
