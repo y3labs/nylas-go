@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go 1.24.x (with cache)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          check-latest: true
+          cache: true
+        env:
+          GOTOOLCHAIN: local
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Match your local command; switch ./nylas -> ./... if you want all pkgs
+      - name: Test (race + coverage)
+        run: go test ./nylas -v -race -covermode=atomic -coverprofile=coverage.out
+
+      - name: Coverage summary (job summary)
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(go tool cover -func=coverage.out | awk '/^total:/ {print $3}')
+          {
+            echo "### Coverage"
+            echo ""
+            echo "**Total:** ${total}"
+            echo ""
+            echo '```'
+            cat coverage.txt
+            echo '```'
+          } >> $GITHUB_STEP_SUMMARY
+
+      - name: HTML coverage report
+        run: go tool cover -html=coverage.out -o coverage.html
+
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+            coverage.txt
+
+      # Public GitHub repos don't need a token for Codecov uploads.
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.out
+          fail_ci_if_error: true
+          verbose: true
+
+      # Fail the job if coverage drops below MIN_COVERAGE (%)
+      - name: Enforce minimum coverage (85%)
+        env:
+          MIN_COVERAGE: "85"
+        run: |
+          pct=$(go tool cover -func=coverage.out | awk '/^total:/ { sub(/%/,"",$3); print $3 }')
+          echo "Total coverage: ${pct}% (minimum ${MIN_COVERAGE}%)"
+          awk -v p="$pct" -v m="$MIN_COVERAGE" 'BEGIN { exit (p+0 < m) ? 1 : 0 }'
