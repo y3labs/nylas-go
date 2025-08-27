@@ -1,6 +1,7 @@
 package nylas
 
 import (
+	"net/http"
 	"reflect"
 	"testing"
 	"time"
@@ -39,6 +40,35 @@ func TestClientInitDefaults(t *testing.T) {
 	// Default timeout per NewClient (your SDK uses 30s by default)
 	if got, want := c.http.Timeout, 30*time.Second; got != want {
 		t.Fatalf("http.Timeout = %s, want %s", got, want)
+	}
+}
+
+func TestClientInitDefaultWithEURegion(t *testing.T) {
+	c := NewClient("test-key", WithRegion(models.RegionEU))
+
+	// Default region is US -> serverUS
+	// But We Explicitly Provide RegionEU and no server url
+	// Should default to EU api URL
+	if got, want := c.serverURL, serverEU; got != want {
+		t.Fatalf("serverURL = %q, want %q", got, want)
+	}
+}
+
+func TestClientInitRegionDefault(t *testing.T) {
+	c := NewClient("test-key", WithRegion(models.RegionUS))
+
+	// Default region is US -> serverUS
+	if got, want := c.serverURL, serverUS; got != want {
+		t.Fatalf("serverURL = %q, want %q", got, want)
+	}
+}
+
+func TestClientInitNonDefaultHTTPTimeout(t *testing.T) {
+	hc := &http.Client{Timeout: 30 * time.Second}
+	c := NewClient("test-key", WithHTTPClient(hc), WithTimeout(60*time.Second))
+
+	if got, want := c.http.Timeout, 60*time.Second; got != want {
+		t.Fatalf("timeout = %s, want %s", got, want)
 	}
 }
 

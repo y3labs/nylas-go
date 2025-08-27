@@ -52,6 +52,7 @@ type UpdateCredentialRequest struct {
 
 // ----- Query params -----
 
+// ListCredentialQueryParams: add `url` tags if your EncodeQuery reads them.
 type ListCredentialQueryParams struct {
 	Limit   *int    `json:"limit,omitempty" url:"limit,omitempty"`
 	Offset  *int    `json:"offset,omitempty" url:"offset,omitempty"`

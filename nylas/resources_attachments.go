@@ -11,6 +11,30 @@ import (
 
 type AttachmentsResource struct{ c *Client }
 
+// Upload a single attachment via multipart. Returns server-side attachment id and request_id.
+/*
+func (r *AttachmentsResource) Upload(ctx context.Context, grantID, filename string, reader io.Reader) (*models.UploadAttachmentResponse, error) {
+	path := "/v3/grants/" + url.PathEscape(grantID) + "/attachments"
+	resp, err := r.c.doMultipart(ctx, http.MethodPost, path, nil, nil, map[string]io.Reader{filename: reader})
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, parseAPIError(resp)
+	}
+	var out models.UploadAttachmentResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	// Nylas also returns x-request-id header; keep the JSON value but prefer header if JSON omits it.
+	if out.RequestID == "" {
+		out.RequestID = resp.Header.Get("x-request-id")
+	}
+	return &out, nil
+}
+*/
+
 // Get returns attachment metadata (Python: find), requires message_id as a query param.
 func (r *AttachmentsResource) Get(
 	ctx context.Context,

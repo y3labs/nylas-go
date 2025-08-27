@@ -1,6 +1,7 @@
 package nylas
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"testing"
@@ -46,5 +47,49 @@ func assertMethodPath(t *testing.T, r *http.Request, method, wantPath string) {
 	wantDec, _ := url.PathUnescape(wantPath)
 	if r.URL.Path != wantDec {
 		t.Fatalf("path = %s (escaped %s), want %s", r.URL.Path, gotEsc, wantPath)
+	}
+}
+
+type errReader struct{}
+
+func (e errReader) Read(p []byte) (int, error) { return 0, errors.New("simulated copy error") }
+
+// rtErr is a RoundTripper that always returns the provided error.
+type rtErr struct{ err error }
+
+func (r rtErr) RoundTrip(*http.Request) (*http.Response, error) { return nil, r.err }
+
+// timeoutErr implements net.Error with Timeout() == true (so wrapTransportError produces SDKTimeoutError).
+type timeoutErr struct{}
+
+func (t timeoutErr) Error() string   { return "simulated timeout" }
+func (t timeoutErr) Timeout() bool   { return true }
+func (t timeoutErr) Temporary() bool { return false }
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && (len(sub) == 0 || (stringIndex(s, sub) >= 0))
+}
+func stringIndex(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}
+
+func TestPtr(t *testing.T) {
+	val := 42
+	ptr := Ptr(val)
+	if ptr == nil || *ptr != 42 {
+		t.Fatalf("expected *ptr=42, got %v", ptr)
+	}
+}
+
+func TestStringPtr(t *testing.T) {
+	s := "hello"
+	ptr := StringPtr(s)
+	if ptr == nil || *ptr != "hello" {
+		t.Fatalf("expected *ptr=hello, got %v", ptr)
 	}
 }

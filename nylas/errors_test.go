@@ -137,9 +137,3 @@ func TestIsStatus(t *testing.T) {
 		t.Fatalf("IsStatus failed for OAuthError")
 	}
 }
-
-type timeoutErr struct{}
-
-func (t *timeoutErr) Error() string   { return "timeout" }
-func (t *timeoutErr) Timeout() bool   { return true }
-func (t *timeoutErr) Temporary() bool { return false }

@@ -171,10 +171,68 @@ func TestApplicationsInfo(t *testing.T) {
 }
 
 func TestApplicationsRedirectURIsAccessor(t *testing.T) {
-	// This Test isnt really necessary as RedirectURIs is exposed on the Client
+	// If you expose RedirectURIs at the Client level only, you can delete this test.
 	app := &ApplicationsResource{c: NewClient("k")}
 	ru := app.RedirectURIs() // requires tiny forwarder on ApplicationsResource
 	if ru == nil {
 		t.Fatal("Applications.RedirectURIs() returned nil")
+	}
+}
+
+func TestApplicationsInfo_ErrorPath(t *testing.T) {
+	// Respond 500 so DoJSON -> parseAPIError -> error, and Info should return (nil, err).
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/applications" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"error": map[string]any{
+				"type":    "server_error",
+				"message": "boom",
+			},
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Applications().Info(context.Background())
+	if err == nil || res != nil {
+		t.Fatalf("expected error and nil response, got res=%#v err=%v", res, err)
+	}
+	if _, ok := IsAPIError(err); !ok {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+}
+
+func TestApplicationsInfo_RequestIDFallbackFromHeader(t *testing.T) {
+	// Return 200 with no request_id in JSON, but set X-Request-Id header.
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.EscapedPath() != "/v3/applications" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.EscapedPath())
+		}
+		w.Header().Set("X-Request-Id", "rid-123")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			// Note: no "request_id" at the top level
+			"data": map[string]any{}, // minimal Application payload
+		})
+	}))
+	defer ts.Close()
+
+	c := NewClient("test-key", WithServerURL(ts.URL))
+	res, err := c.Applications().Info(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil {
+		t.Fatalf("nil response")
+	}
+	// Info should copy header to Response.RequestID when JSON omits it.
+	if res.RequestID != "rid-123" {
+		t.Fatalf("request id fallback failed: got %q", res.RequestID)
+	}
+	// Headers should be preserved on the response as well.
+	if res.Headers.Get("X-Request-Id") != "rid-123" {
+		t.Fatalf("headers not propagated")
 	}
 }
